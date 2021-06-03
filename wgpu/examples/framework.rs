@@ -360,7 +360,22 @@ pub fn run<E: Example>(title: &str) {
     let title = title.to_owned();
     wasm_bindgen_futures::spawn_local(async move {
         let setup = setup::<E>(&title).await;
-        start::<E>(setup);
+
+        // make sure to handle JS exceptions thrown inside start.
+        // Otherwise wasm_bindgen_futures Queue would break and never handle any tasks again.
+        // This is required, because winit uses JS exception for control flow to escape from `run`.
+        use wasm_bindgen::{closure::Closure, JsCast, JsValue};
+        let start_closure =
+            Closure::once_into_js(move || start::<E>(setup)).unchecked_into::<js_sys::Function>();
+        if let Err(error) = start_closure.call0(&JsValue::UNDEFINED) {
+            let is_control_flow_exception = error.dyn_ref::<js_sys::Error>().map_or(false, |e| {
+                e.message().includes("Using exceptions for control flow", 0)
+            });
+
+            if !is_control_flow_exception {
+                web_sys::console::error_1(&error);
+            }
+        }
     });
 }
 
